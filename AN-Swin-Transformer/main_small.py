@@ -87,11 +87,9 @@ def main(config):
     if hasattr(model, 'flops'):
         flops = model.flops()
         logger.info(f"number of GFLOPs: {flops / 1e9}")
-
-    model.cuda()
-    model_without_ddp = model
-
     
+    model.cuda()
+    model_without_ddp = model    
 
     optimizer = build_optimizer(config, model)
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.LOCAL_RANK], broadcast_buffers=False)

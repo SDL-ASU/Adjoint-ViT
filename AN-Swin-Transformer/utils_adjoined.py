@@ -115,44 +115,44 @@ def load_pretrained(config, model, logger):
 			del state_dict['head.bias']
 			logger.warning(f"Error in loading classifier head, re-init classifier head to 0")
 
-        # state_dict_temp = state_dict.copy()
-	# for k,v in state_dict_temp.items():
-	#	if k.find('blocks')!=-1 and k.find('norm1')!=-1:
-	#		new_k1 = k.replace('norm1', "norm1_large")
-	#		new_k2 = k.replace('norm1', "norm1_small")
-	#		state_dict[new_k1] = v
-	#		state_dict[new_k2] = v
-	#		del state_dict[k]
-	#	elif k.find('blocks')!=-1 and k.find('norm2')!=-1:
-	#		new_k1 = k.replace('norm2', "norm2_large")
-	#		new_k2 = k.replace('norm2', "norm2_small")
-	#		state_dict[new_k1] = v
-	#		state_dict[new_k2] = v
-	#		del state_dict[k]
-	#	elif k.find('downsample')!=-1 and k.find('norm.weight')!=-1:
-	#		new_k1 = k.replace('norm.weight', 'norm_large.weight')
-	#		new_k2 = k.replace('norm.weight', 'norm_small.weight')
-	#		state_dict[new_k1] = v
-	#		state_dict[new_k2] = v
-	#		del state_dict[k]
-	#	elif k.find('downsample')!=-1 and k.find('norm.bias')!=-1:
-	#		new_k1 = k.replace('norm.bias', 'norm_large.bias')
-	#		new_k2 = k.replace('norm.bias', 'norm_small.bias')
-	#		state_dict[new_k1] = v
-	#		state_dict[new_k2] = v
-	#		del state_dict[k]
-	#	elif k=='norm.weight':
-	#		new_k1 = 'norm_large.weight'
-	#		new_k2 = 'norm_small.weight'
-	#		state_dict[new_k1] = v
-	#		state_dict[new_k2] = v
-	#		del state_dict[k]
-	#	elif k=='norm.bias':
-	#		new_k1 = 'norm_large.bias'
-	#		new_k2 = 'norm_small.bias'
-	#		state_dict[new_k1] = v
-	#		state_dict[new_k2] = v
-	#		del state_dict[k]
+    state_dict_temp = state_dict.copy()
+	for k,v in state_dict_temp.items():
+		if k.find('blocks')!=-1 and k.find('norm1')!=-1:
+			new_k1 = k.replace('norm1', "norm1_large")
+			new_k2 = k.replace('norm1', "norm1_small")
+			state_dict[new_k1] = v
+			state_dict[new_k2] = v
+			del state_dict[k]
+		elif k.find('blocks')!=-1 and k.find('norm2')!=-1:
+			new_k1 = k.replace('norm2', "norm2_large")
+			new_k2 = k.replace('norm2', "norm2_small")
+			state_dict[new_k1] = v
+			state_dict[new_k2] = v
+			del state_dict[k]
+		elif k.find('downsample')!=-1 and k.find('norm.weight')!=-1:
+			new_k1 = k.replace('norm.weight', 'norm_large.weight')
+			new_k2 = k.replace('norm.weight', 'norm_small.weight')
+			state_dict[new_k1] = v
+			state_dict[new_k2] = v
+			del state_dict[k]
+		elif k.find('downsample')!=-1 and k.find('norm.bias')!=-1:
+			new_k1 = k.replace('norm.bias', 'norm_large.bias')
+			new_k2 = k.replace('norm.bias', 'norm_small.bias')
+			state_dict[new_k1] = v
+			state_dict[new_k2] = v
+			del state_dict[k]
+		elif k=='norm.weight':
+			new_k1 = 'norm_large.weight'
+			new_k2 = 'norm_small.weight'
+			state_dict[new_k1] = v
+			state_dict[new_k2] = v
+			del state_dict[k]
+		elif k=='norm.bias':
+			new_k1 = 'norm_large.bias'
+			new_k2 = 'norm_small.bias'
+			state_dict[new_k1] = v
+			state_dict[new_k2] = v
+			del state_dict[k]
 	
 	msg = model.load_state_dict(state_dict, strict=False)
 	logger.warning(msg)

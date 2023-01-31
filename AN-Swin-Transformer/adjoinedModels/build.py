@@ -14,6 +14,19 @@ def build_model(config, is_pretrain=False):
     else:
         import torch.nn as nn
         layernorm = nn.LayerNorm
+    
+    if config.DAN_TRAINING:
+        alpha_downsample = config.DAN_DOWNSAMPLE_COMPRESSION_FACTORS
+        alpha_l = config.DAN_COMPRESSION_FACTORS
+    else:
+        alpha_downsample = config.ADJOINED_DOWNSAMPLE_COMPRESSION_FACTORS
+        alpha_l = [[], [], [], []]
+        for i, alpha in enumerate(config.ADJOINED_COMPRESSION_FACTORS):
+            for j in config.MODEL.SWIN.DEPTHS:
+                alpha_l[i].append(alpha)
+        alpha_l[0][1] = 1
+        alpha_l[3][-1] = 1
+
 
     if model_type == 'swin':
         model = SwinTransformer(img_size=config.DATA.IMG_SIZE,
@@ -33,7 +46,9 @@ def build_model(config, is_pretrain=False):
                                 norm_layer=layernorm,
                                 patch_norm=config.MODEL.SWIN.PATCH_NORM,
                                 use_checkpoint=config.TRAIN.USE_CHECKPOINT,
-                                fused_window_process=config.FUSED_WINDOW_PROCESS)
+                                fused_window_process=config.FUSED_WINDOW_PROCESS,
+                                alpha_downsample=alpha_downsample,
+                                alpha_l=alpha_l)
     else:
         raise NotImplementedError(f"Unkown model: {model_type}")
 

@@ -87,9 +87,11 @@ def main(config):
 	
 	model.cuda()
 	model_without_ddp = model
-	
-	get_architecture(config, model, logger)
-	exit()
+
+	if config.GET_ARCHITECTURE:
+		get_architecture(config, model, logger)
+		exit()
+
 	optimizer, gumbel_optimizer = build_optimizer_search(config, model)
 	model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.LOCAL_RANK], broadcast_buffers=False, find_unused_parameters=True)
 	loss_scaler = NativeScalerWithGradNormCount()

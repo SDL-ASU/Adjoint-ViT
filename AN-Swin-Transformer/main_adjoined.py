@@ -13,14 +13,14 @@ import torch.distributed as dist
 from timm.loss import LabelSmoothingCrossEntropy, SoftTargetCrossEntropy
 from timm.utils import accuracy, AverageMeter
 
-from config import get_config
-from adjointModels import build_model
-from adjointModels import AdjointLoss
+from config_adjoined import get_config
+from adjoinedModels import build_model
+from adjoinedModels import AdjoinedLoss
 from data import build_loader
 from lr_scheduler import build_scheduler
 from optimizer import build_optimizer
 from logger import create_logger
-from utils_adjoint import load_checkpoint, load_pretrained, save_checkpoint, NativeScalerWithGradNormCount, auto_resume_helper, reduce_tensor
+from utils_adjoined import load_checkpoint, load_pretrained, save_checkpoint, NativeScalerWithGradNormCount, auto_resume_helper, reduce_tensor
 
 def parse_option():
 	parser = argparse.ArgumentParser('Swin Transformer training and evaluation script', add_help=False)
@@ -84,18 +84,9 @@ def main(config):
 	if hasattr(model, 'flops'):
 		flops = model.flops()
 		logger.info(f"number of GFLOPs: {flops / 1e9}")
-	
-	if hasattr(model, 'flopsAdjoint'):
-		flops = model.flopsAdjoint()
-		logger.info(f"number of GFLOPs (Adjoint): {flops / 1e9}")
-	
-	if hasattr(model, 'params'):
-		params = model.params()
-		logger.info(f"number of params (Adjoint): {params}")
 
 	model.cuda()
 	model_without_ddp = model
-
 
 	optimizer = build_optimizer(config, model)
 	model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.LOCAL_RANK], broadcast_buffers=False, find_unused_parameters=True)
@@ -106,8 +97,8 @@ def main(config):
 	else:
 		lr_scheduler = build_scheduler(config, optimizer, len(data_loader_train))
 
-	train_criterion = AdjointLoss(alpha=0, training=True).cuda()
-	val_criterion = AdjointLoss(alpha=0, training=False).cuda()
+	train_criterion = AdjoinedLoss(alpha=0, training=True).cuda()
+	val_criterion = AdjoinedLoss(alpha=0, training=False).cuda()
 
 	max_accuracy = 0.0
 	max_adjoint_accuracy = 0.0
@@ -128,6 +119,7 @@ def main(config):
 		max_accuracy, max_adjoint_accuracy = load_checkpoint(config, model_without_ddp, optimizer, lr_scheduler, loss_scaler, logger)
 		acc1, acc5, acc1_adjoint, acc5_adjoint, standard_loss, loss = validate(config, data_loader_val, model, val_criterion)
 		logger.info(f"Accuracy of the network on the {len(dataset_val)} test images: {acc1:.1f}%")
+		logger.info(f"Adjoined Accuracy of the network on the {len(dataset_val)} test images: {acc1_adjoint:.1f}%")
 		if config.EVAL_MODE:
 			return
 
@@ -135,6 +127,7 @@ def main(config):
 		load_pretrained(config, model_without_ddp, logger)
 		acc1, acc5, acc1_adjoint, acc5_adjoint, standard_loss, loss = validate(config, data_loader_val, model, val_criterion)
 		logger.info(f"Accuracy of the network on the {len(dataset_val)} test images: {acc1:.1f}%")
+		logger.info(f"Adjoined Accuracy of the network on the {len(dataset_val)} test images: {acc1_adjoint:.1f}%")
 
 	if config.THROUGHPUT_MODE:
 		throughput(data_loader_val, model, logger)
@@ -159,10 +152,10 @@ def main(config):
 
 		acc1, acc5, acc1_adjoint, acc5_adjoint, standard_loss, loss = validate(config, data_loader_val, model, val_criterion)
 		logger.info(f"Accuracy of the network on the {len(dataset_val)} test images: {acc1:.1f}%")
-		logger.info(f"Adjoint Accuracy of the network on the {len(dataset_val)} test images: {acc1_adjoint:.1f}%")
+		logger.info(f"Adjoined Accuracy of the network on the {len(dataset_val)} test images: {acc1_adjoint:.1f}%")
 		max_accuracy = max(max_accuracy, acc1)
 		max_adjoint_accuracy = max(max_adjoint_accuracy, acc1_adjoint)
-		logger.info(f'Max accuracy: {max_accuracy:.2f}  Max adjoint accuracy: {max_adjoint_accuracy:.2f}%')
+		logger.info(f'Max accuracy: {max_accuracy:.2f}  Max adjoined accuracy: {max_adjoint_accuracy:.2f}%')
 
 	total_time = time.time() - start_time
 	total_time_str = str(datetime.timedelta(seconds=int(total_time)))
@@ -291,10 +284,10 @@ def validate(config, data_loader, model, criterion):
 				f'Acc@1 {acc1_meter.val:.3f} ({acc1_meter.avg:.3f})\t'
 				f'Acc@5 {acc5_meter.val:.3f} ({acc5_meter.avg:.3f})\t'
 				f'Loss {loss_meter.val:.4f} ({loss_meter.avg:.4f})\t'
-				f'Acc@1_adjoint {acc1_adjoint_meter.val:.3f} ({acc1_adjoint_meter.avg:.3f})\t'
-				f'Acc@5_adjoint {acc5_adjoint_meter.val:.3f} ({acc5_adjoint_meter.avg:.3f})\t'
+				f'Acc@1_adjoined {acc1_adjoint_meter.val:.3f} ({acc1_adjoint_meter.avg:.3f})\t'
+				f'Acc@5_adjoined {acc5_adjoint_meter.val:.3f} ({acc5_adjoint_meter.avg:.3f})\t'
 				f'Mem {memory_used:.0f}MB')
-	logger.info(f' * Acc@1 {acc1_meter.avg:.3f} Acc@5 {acc5_meter.avg:.3f} Acc@1_adjoint {acc1_adjoint_meter.avg:.3f} Acc@5_adjoint {acc5_adjoint_meter.avg:.3f}')
+	logger.info(f' * Acc@1 {acc1_meter.avg:.3f} Acc@5 {acc5_meter.avg:.3f} Acc@1_adjoined {acc1_adjoint_meter.avg:.3f} Acc@5_adjoined {acc5_adjoint_meter.avg:.3f}')
 	return acc1_meter.avg, acc5_meter.avg, acc1_adjoint_meter.avg, acc5_adjoint_meter.avg, standard_loss_meter.avg, loss_meter.avg
 
 

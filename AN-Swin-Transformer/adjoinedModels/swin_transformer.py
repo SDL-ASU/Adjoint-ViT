@@ -60,22 +60,6 @@ class Mlp(nn.Module):
             concatinated_tensor = torch.cat((x_large, x_large), dim=0)
         
         return concatinated_tensor
-    
-    def params(self):
-        if (0 <= self.stage < 3 and self.stage + self.depth >= 1) or (self.stage == 3 and self.depth < 1):
-            params = 0
-            # fc1 params
-            params += (self.in_features * self.hidden_features // self.alpha + self.in_features) // self.alpha
-            # fc2 params
-            params += (self.hidden_features * self.out_features // self.alpha + self.hidden_features) // self.alpha
-        else:
-            params = 0
-            # fc1 params
-            params += self.in_features * self.hidden_features + self.in_features
-            # fc2 params
-            params += self.hidden_features * self.out_features + self.hidden_features
-        
-        return params
 
 
 def window_partition(x, window_size):
@@ -244,38 +228,6 @@ class WindowAttention(nn.Module):
         # x = self.proj(x)
         flops += N * self.dim * self.dim
         return flops
-    
-    def flopsAdjoint(self, N):
-        if (0 <= self.stage < 3 and self.stage + self.depth >= 1) or (self.stage == 3 and self.depth < 1):
-            # calculate flops for 1 window with token length of N
-            flops = 0
-            # qkv = self.qkv(x)
-            flops += N * (self.dim // self.alpha) * 3 * (self.dim // self.alpha)
-            # attn = (q @ k.transpose(-2, -1))
-            flops += (self.num_heads // self.alpha) * N * (self.dim // self.num_heads) * N
-            #  x = (attn @ v)
-            flops += (self.num_heads // self.alpha) * N * N * (self.dim // self.num_heads)
-            # x = self.proj(x)
-            flops += N * (self.dim // self.alpha) * (self.dim // self.alpha)
-            return flops
-        else:
-            return self.flops(N)
-    
-    def params(self):
-        if (0 <= self.stage < 3 and self.stage + self.depth >= 1) or (self.stage == 3 and self.depth < 1):
-            params = 0
-            # q, k, v
-            params += 3 * (self.dim * self.dim // self.alpha + self.dim) // self.alpha
-            # projection
-            params += (self.dim * self.dim // self.alpha + self.dim) // self.alpha
-        else:
-            params = 0
-            # q, k, v
-            params += 3 * (self.dim * self.dim + self.dim)
-            # projection
-            params += self.dim * self.dim + self.dim
-
-        return params
 
 
 class SwinTransformerBlock(nn.Module):
@@ -505,47 +457,6 @@ class SwinTransformerBlock(nn.Module):
         flops += self.dim * H * W
         return flops
     
-    def flopsAdjoint(self):
-        if (0 <= self.stage < 3 and self.stage + self.depth >= 1) or (self.stage == 3 and self.depth < 1):
-            flops = 0
-            H, W = self.input_resolution
-            # norm1
-            flops += (self.dim // self.alpha) * H * W
-            # W-MSA/SW-MSA
-            nW = H * W / self.window_size / self.window_size
-            flops += (nW // self.alpha) * self.attn.flops(self.window_size * self.window_size)
-            # mlp
-            flops += 2 * H * W * (self.dim // self.alpha) * (self.dim // self.alpha) * self.mlp_ratio
-            # norm2
-            flops += (self.dim // self.alpha) * H * W
-            return flops
-        else:
-            return self.flops()
-    
-    def params(self):
-        params = 0
-        # norm 1 {weight + bias}
-        if (0 <= self.stage < 3 and self.stage + self.depth >= 1) or (self.stage == 3 and self.depth < 1):
-            params += (2 * self.dim) // self.alpha
-        else:
-            params += 2 * self.dim
-        
-        # attn params
-        params += self.attn.params()
-
-        # norm 2 {weight + bias}
-        if (0 <= self.stage < 3 and self.stage + self.depth >= 1) or (self.stage == 3 and self.depth < 1):
-            params += (2 * self.dim) // self.alpha
-        else:
-            params += 2 * self.dim
-        
-        # mlp params
-        params += self.mlp.params()
-
-        return params
-
-
-
 class PatchMerging(nn.Module):
     r""" Patch Merging Layer.
 
@@ -615,21 +526,6 @@ class PatchMerging(nn.Module):
         flops = H * W * self.dim
         flops += (H // 2) * (W // 2) * 4 * self.dim * 2 * self.dim
         return flops
-
-    def flopsAdjoint(self):
-        H, W = self.input_resolution
-        flops = H * W * (self.dim // self.alpha)
-        flops += (H // 2) * (W // 2) * 4 * (self.dim // self.alpha) * 2 * (self.dim // self.alpha)
-        return flops
-    
-    def params(self):
-        params = 0
-        # norm
-        params += 4 * (2 * self.dim) // self.alpha
-        # reduction
-        params += 4 * (self.dim // self.alpha) * 2 * (self.dim // self.alpha) + 4 * (self.dim // self.alpha)
-
-        return params
 
 class BasicLayer(nn.Module):
     """ A basic Swin Transformer layer for one stage.
@@ -706,22 +602,6 @@ class BasicLayer(nn.Module):
             flops += self.downsample.flops()
         return flops
 
-    def flopsAdjoint(self):
-        flops = 0
-        for blk in self.blocks:
-            flops += blk.flopsAdjoint()
-        if self.downsample is not None:
-            flops += self.downsample.flopsAdjoint()
-        return flops
-
-    def params(self):
-        params = 0
-        for blk in self.blocks:
-            params += blk.params()
-        if self.downsample is not None:
-            params += self.downsample.params() 
-        return params
-
 class PatchEmbed(nn.Module):
     r""" Image to Patch Embedding
 
@@ -768,20 +648,6 @@ class PatchEmbed(nn.Module):
         if self.norm is not None:
             flops += Ho * Wo * self.embed_dim
         return flops
-
-    def flopsAdjoint(self):
-        Ho, Wo = self.patches_resolution
-        flops = Ho * Wo * self.embed_dim * self.in_chans * (self.patch_size[0] * self.patch_size[1])
-        if self.norm is not None:
-            flops += Ho * Wo * self.embed_dim
-        return flops
-    
-    def params(self):
-        params = ((self.patch_size[0] * self.patch_size[1] * self.in_chans) + 1) * self.embed_dim
-        if self.norm is not None:
-            params += 2 * self.embed_dim
-        return params
-
 
 class SwinTransformer(nn.Module):
     r""" Swin Transformer
@@ -931,21 +797,3 @@ class SwinTransformer(nn.Module):
         flops += self.num_features * self.patches_resolution[0] * self.patches_resolution[1] // (2 ** self.num_layers)
         flops += self.num_features * self.num_classes
         return flops
-
-    def flopsAdjoint(self):
-        flops = 0
-        flops += self.patch_embed.flopsAdjoint()
-        for i, layer in enumerate(self.layers):
-            flops += layer.flopsAdjoint()
-        flops += self.num_features * self.patches_resolution[0] * self.patches_resolution[1] // ((2 ** self.num_layers) * self.alpha) 
-        flops += self.num_features * self.num_classes
-        return flops
-
-    def params(self):
-        params = 0
-        params += self.patch_embed.params()
-        for i, layer in enumerate(self.layers):
-            params += layer.params()
-        params += 2 * (self.num_features // self.alpha)
-        params += (self.num_features // self.alpha) * self.num_classes
-        return params
