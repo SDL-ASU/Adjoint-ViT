@@ -17,14 +17,16 @@ import logging
 from collections import OrderedDict
 from contextlib import suppress
 from datetime import datetime
-import models
+import models_AN
+#import adjoint
+from adjoint.t2t_vit_adjoint import AdjointLoss
 
 import torch
 import torch.nn as nn
 import torchvision.utils
 from torch.nn.parallel import DistributedDataParallel as NativeDDP
 
-from timm.data import Dataset, create_loader, resolve_data_config, Mixup, FastCollateMixup, AugMixDataset
+from timm.data import ImageDataset, create_loader, resolve_data_config, Mixup, FastCollateMixup, AugMixDataset
 from timm.models import load_checkpoint, create_model, resume_checkpoint, convert_splitbn_model
 from timm.utils import *
 from timm.loss import LabelSmoothingCrossEntropy, SoftTargetCrossEntropy, JsdCrossEntropy
@@ -34,6 +36,9 @@ from timm.utils import ApexScaler, NativeScaler
 
 torch.backends.cudnn.benchmark = True
 _logger = logging.getLogger('train')
+
+import warnings
+warnings.filterwarnings('ignore')
 
 # The first arg parser parses out only the --config argument, this argument is used to
 # load a yaml file containing key-values that override the defaults for the main parser below
@@ -204,7 +209,7 @@ parser.add_argument('--model-ema-decay', type=float, default=0.99996,
 # Misc
 parser.add_argument('--seed', type=int, default=42, metavar='S',
                     help='random seed (default: 42)')
-parser.add_argument('--log-interval', type=int, default=50, metavar='N',
+parser.add_argument('--log-interval', type=int, default=1000, metavar='N',
                     help='how many batches to wait before logging training status')
 parser.add_argument('--recovery-interval', type=int, default=0, metavar='N',
                     help='how many batches to wait before writing recovery checkpoint')
@@ -235,6 +240,12 @@ parser.add_argument('--tta', type=int, default=0, metavar='N',
 parser.add_argument("--local_rank", default=0, type=int)
 parser.add_argument('--use-multi-epochs-loader', action='store_true', default=False,
                     help='use the multi-epochs-loader to save time at the beginning of every epoch')
+
+# Adjoint training
+parser.add_argument('--is_adjoint_training', type=str, default='True', help='')
+parser.add_argument('--compression_factor', type=int, default=2, help='')
+parser.add_argument('--block-depth', type=int, default=3, help='')
+parser.add_argument('--small_model', type=str, default='False')
 
 try:
     from apex import amp
@@ -302,6 +313,26 @@ def main():
 
     torch.manual_seed(args.seed + args.rank)
 
+    '''    
+    model = create_model(
+            args.model + '_adjoint',
+            pretrained=args.pretrained,
+            num_classes=args.num_classes,
+            drop_rate=args.drop,
+            drop_connect_rate=args.drop_connect,  # DEPRECATED, use drop_path
+            drop_path_rate=args.drop_path,
+            drop_block_rate=args.drop_block,
+            global_pool=args.gp,
+            bn_tf=args.bn_tf,
+            bn_momentum=args.bn_momentum,
+            bn_eps=args.bn_eps,
+            checkpoint_path=args.initial_checkpoint,
+            img_size=args.img_size,
+            alpha=args.compression_factor,
+            block_depth=args.block_depth)
+   
+    '''
+    # resume
     model = create_model(
         args.model,
         pretrained=args.pretrained,
@@ -313,10 +344,38 @@ def main():
         global_pool=args.gp,
         bn_tf=args.bn_tf,
         bn_momentum=args.bn_momentum,
-        bn_eps=args.bn_eps,
         checkpoint_path=args.initial_checkpoint,
-        img_size=args.img_size)
-
+        bn_eps=args.bn_eps,
+        img_size=args.img_size,
+        block_depth=args.block_depth)
+    
+    '''
+    state_dict = torch.load(args.initial_checkpoint)['state_dict_ema']
+    for k,v in state_dict.items():
+        if k.find('block')!=-1 and k.find('norm1')!=-1:
+            new_k1 = k.replace('norm1', "norm1_large")
+            new_k2 = k.replace('norm1', "norm1_small")
+            model.state_dict()[new_k1].copy_(v)
+            model.state_dict()[new_k2].copy_(v)
+        elif k.find('block')!=-1 and k.find('norm2')!=-1:
+            new_k1 = k.replace('norm2', "norm2_large")
+            new_k2 = k.replace('norm2', "norm2_small")
+            model.state_dict()[new_k1].copy_(v)
+            model.state_dict()[new_k2].copy_(v)
+        elif k=='norm.weight':
+            new_k1 = 'norm_large.weight'
+            new_k2 = 'norm_small.weight'
+            model.state_dict()[new_k1].copy_(v)
+            model.state_dict()[new_k2].copy_(v)
+        elif k=='norm.bias':
+            new_k1 = 'norm_large.bias'
+            new_k2 = 'norm_small.bias'
+            model.state_dict()[new_k1].copy_(v)
+            model.state_dict()[new_k2].copy_(v)
+        else:
+            model.state_dict()[k].copy_(v)
+    
+    '''
     if args.local_rank == 0:
         _logger.info('Model %s created, param count: %d' %
                      (args.model, sum([m.numel() for m in model.parameters()])))
@@ -387,6 +446,7 @@ def main():
             log_info=args.local_rank == 0)
 
     model_ema = None
+    args.model_ema = False
     if args.model_ema:
         # Important to create EMA model after cuda(), DP wrapper, and AMP but before SyncBN and DDP wrapper
         model_ema = ModelEma(
@@ -418,7 +478,7 @@ def main():
         else:
             if args.local_rank == 0:
                 _logger.info("Using native Torch DistributedDataParallel.")
-            model = NativeDDP(model, device_ids=[args.local_rank])  # can use device str in Torch >= 1.1
+            model = NativeDDP(model, device_ids=[args.local_rank], find_unused_parameters=True)  # can use device str in Torch >= 1.1
         # NOTE: EMA model does not need to be wrapped by DDP
 
     lr_scheduler, num_epochs = create_scheduler(args, optimizer)
@@ -438,7 +498,7 @@ def main():
     if not os.path.exists(train_dir):
         _logger.error('Training folder does not exist at: {}'.format(train_dir))
         exit(1)
-    dataset_train = Dataset(train_dir)
+    dataset_train = ImageDataset(train_dir)
 
     collate_fn = None
     mixup_fn = None
@@ -494,7 +554,7 @@ def main():
         if not os.path.isdir(eval_dir):
             _logger.error('Validation folder does not exist at: {}'.format(eval_dir))
             exit(1)
-    dataset_eval = Dataset(eval_dir)
+    dataset_eval = ImageDataset(eval_dir)
 
     loader_eval = create_loader(
         dataset_eval,
@@ -511,22 +571,31 @@ def main():
         pin_memory=args.pin_mem,
     )
 
+    train_loss_fn = AdjointLoss(alpha=1, training=True).cuda()
+    validate_loss_fn = AdjointLoss(alpha=1, training=False).cuda()
+    '''
     if args.jsd:
         assert num_aug_splits > 1  # JSD only valid with aug splits set
+        print("args.jsd", args.jsd)
         train_loss_fn = JsdCrossEntropy(num_splits=num_aug_splits, smoothing=args.smoothing).cuda()
     elif mixup_active:
+        print("mixup_active", mixup_active)
         # smoothing is handled with mixup target transform
         train_loss_fn = SoftTargetCrossEntropy().cuda()
     elif args.smoothing:
+        print("args.smoothing", args.smoothing)
         train_loss_fn = LabelSmoothingCrossEntropy(smoothing=args.smoothing).cuda()
     else:
         train_loss_fn = nn.CrossEntropyLoss().cuda()
     validate_loss_fn = nn.CrossEntropyLoss().cuda()
-
+    '''
     eval_metric = args.eval_metric
     best_metric = None
     best_epoch = None
-    
+   
+    #val_metrics = validate(model, loader_eval, validate_loss_fn, args)
+    #print(f"Top-1 accuracy of the model is: {val_metrics['top1']:.1f}%")
+
     if args.eval_checkpoint:  # evaluate the model
         load_checkpoint(model, args.eval_checkpoint, args.model_ema)
         val_metrics = validate(model, loader_eval, validate_loss_fn, args)
@@ -536,7 +605,7 @@ def main():
     saver = None
     output_dir = ''
     if args.local_rank == 0:
-        output_base = args.output if args.output else './output'
+        output_base = args.output if args.output else '/scratch/ag7644/t2t-vit/output'
         exp_name = '-'.join([
             datetime.now().strftime("%Y%m%d-%H%M%S"),
             args.model,
@@ -550,8 +619,19 @@ def main():
         with open(os.path.join(output_dir, 'args.yaml'), 'w') as f:
             f.write(args_text)
 
+    # /scratch/ag7644/t2t-vit/output/train/20221221-214433-t2t_vit_14-224/checkpoint-13.pth.tar
+    # /scratch/ag7644/t2t-vit/output/train/20230123-084325-t2t_vit_14-224/last.pth.tar
+
+    lr_scheduler = None
     try:  # train the model
         for epoch in range(start_epoch, num_epochs):
+            x = (epoch+38+52)/num_epochs
+            x = epoch/num_epochs
+            train_loss_fn.alpha = min(4*(x**2), 1)
+            validate_loss_fn.alpha = min(4*(x**2), 1)
+
+            eval_metrics = validate(model, loader_eval, validate_loss_fn, args, amp_autocast=amp_autocast)
+
             if args.distributed:
                 loader_train.sampler.set_epoch(epoch)
 
@@ -697,11 +777,13 @@ def train_epoch(
     return OrderedDict([('loss', losses_m.avg)])
 
 
-def validate(model, loader, loss_fn, args, amp_autocast=suppress, log_suffix=''):
+def validate(model, loader, loss_fn, args, amp_autocast=suppress, log_suffix='', is_individual_training=False):
     batch_time_m = AverageMeter()
     losses_m = AverageMeter()
     top1_m = AverageMeter()
     top5_m = AverageMeter()
+    top1_adjoint_m = AverageMeter()
+    top5_adjoint_m = AverageMeter()
 
     model.eval()
 
@@ -728,12 +810,23 @@ def validate(model, loader, loss_fn, args, amp_autocast=suppress, log_suffix='')
                 target = target[0:target.size(0):reduce_factor]
 
             loss = loss_fn(output, target)
-            acc1, acc5 = accuracy(output, target, topk=(1, 5))
+            
+            if not is_individual_training:
+                l, _ = output.shape
+                acc1, acc5 = accuracy(output[:l//2], target, topk=(1, 5))
+                acc1_adjoint, acc5_adjoint = accuracy(
+                    output[l//2:], target, topk=(1, 5))
+            else:
+                acc1, acc5 = accuracy(output, target, topk=(1, 5))
+
 
             if args.distributed:
                 reduced_loss = reduce_tensor(loss.data, args.world_size)
                 acc1 = reduce_tensor(acc1, args.world_size)
                 acc5 = reduce_tensor(acc5, args.world_size)
+                if not is_individual_training:
+                    acc1_adjoint = reduce_tensor(acc1_adjoint, args.world_size)
+                    acc5_adjoint = reduce_tensor(acc5_adjoint, args.world_size)
             else:
                 reduced_loss = loss.data
 
@@ -742,21 +835,41 @@ def validate(model, loader, loss_fn, args, amp_autocast=suppress, log_suffix='')
             losses_m.update(reduced_loss.item(), input.size(0))
             top1_m.update(acc1.item(), output.size(0))
             top5_m.update(acc5.item(), output.size(0))
+            if not is_individual_training:
+                top1_adjoint_m.update(acc1_adjoint.item(), output.size(0))
+                top5_adjoint_m.update(acc5_adjoint.item(), output.size(0))
 
             batch_time_m.update(time.time() - end)
             end = time.time()
             if args.local_rank == 0 and (last_batch or batch_idx % args.log_interval == 0):
                 log_name = 'Test' + log_suffix
-                _logger.info(
-                    '{0}: [{1:>4d}/{2}]  '
-                    'Time: {batch_time.val:.3f} ({batch_time.avg:.3f})  '
-                    'Loss: {loss.val:>7.4f} ({loss.avg:>6.4f})  '
-                    'Acc@1: {top1.val:>7.4f} ({top1.avg:>7.4f})  '
-                    'Acc@5: {top5.val:>7.4f} ({top5.avg:>7.4f})'.format(
+                if not is_individual_training:
+                    _logger.info(
+                        '{0}: [{1:>4d}/{2}]  '
+                        'Time: {batch_time.val:.3f} ({batch_time.avg:.3f})  '
+                        'Loss: {loss.val:>7.4f} ({loss.avg:>6.4f})  '
+                        'Acc@1: {top1.val:>7.4f} ({top1.avg:>7.4f})  '
+                        'Acc@5: {top5.val:>7.4f} ({top5.avg:>7.4f})  '
+                        'Acc@1 Adjoint: {top1_adjoint.val:>7.4f} ({top1_adjoint.avg:>7.4f})  '
+                        'Acc@5 Adjoint: {top5_adjoint.val:>7.4f} ({top5_adjoint.avg:>7.4f})'.format(
+                            log_name, batch_idx, last_idx, batch_time=batch_time_m,
+                            loss=losses_m, top1=top1_m, top5=top5_m, top1_adjoint=top1_adjoint_m, top5_adjoint=top5_adjoint_m))
+                else:
+                   _logger.info(
+                        '{0}: [{1:>4d}/{2}]  '
+                        'Time: {batch_time.val:.3f} ({batch_time.avg:.3f})  '
+                        'Loss: {loss.val:>7.4f} ({loss.avg:>6.4f})  '
+                        'Acc@1: {top1.val:>7.4f} ({top1.avg:>7.4f})  '
+                        'Acc@5: {top5.val:>7.4f} ({top5.avg:>7.4f})'.format(
                         log_name, batch_idx, last_idx, batch_time=batch_time_m,
                         loss=losses_m, top1=top1_m, top5=top5_m))
 
-    metrics = OrderedDict([('loss', losses_m.avg), ('top1', top1_m.avg), ('top5', top5_m.avg)])
+    if not is_individual_training:
+        metrics = OrderedDict(
+            [('loss', losses_m.avg), ('top1', top1_m.avg), ('top5', top5_m.avg), ('top1_adjoint', top1_adjoint_m.avg), ('top5_adjoint', top5_adjoint_m.avg)])
+    else:
+        metrics = OrderedDict(
+            [('loss', losses_m.avg), ('top1', top1_m.avg), ('top5', top5_m.avg)])
 
     return metrics
 
