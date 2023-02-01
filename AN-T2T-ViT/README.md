@@ -1,14 +1,22 @@
 ## 1. Requirements
+### Pip
 
-[timm](https://github.com/rwightman/pytorch-image-models), pip install timm==0.3.4
+[timm](https://github.com/rwightman/pytorch-image-models), pip install timm
 
-torch>=1.4.0
+pip3 install torch torchvision torchaudio
 
-torchvision>=0.5.0
+pip install PyYAML
 
-pyyaml
+###  Conda
+[timm] conda install -c conda-forge timm
 
-data prepare: ImageNet with the following folder structure, you can extract imagenet by this [script](https://gist.github.com/BIGBALLON/8a71d225eff18d88e469e6ea9b39cef4).
+conda install pytorch torchvision torchaudio pytorch-cuda=11.7 -c pytorch -c nvidia
+
+conda install -c conda-forge pyyaml
+
+
+### Data prepare
+ImageNet with the following folder structure, you can extract imagenet by this [script](https://gist.github.com/BIGBALLON/8a71d225eff18d88e469e6ea9b39cef4).
 
 ```
 │imagenet/
@@ -26,122 +34,68 @@ data prepare: ImageNet with the following folder structure, you can extract imag
 │  ├── ......
 ```
 
-### Usage
-The way to use our pretrained T2T-ViT:
-```
-from models.t2t_vit import *
-from utils import load_for_transfer_learning 
+## 2. Validation
 
-# create model
-model = t2t_vit_14()
-
-# load the pretrained weights
-load_for_transfer_learning(model, /path/to/pretrained/weights, use_ema=True, strict=False, num_classes=1000)  # change num_classes based on dataset, can work for different image size as we interpolate the position embeding for different image size.
-```
-
-
-## 3. Validation
-
-Test the T2T-ViT-14 (take Performer in T2T module),
-
-Download the [T2T-ViT-14](https://github.com/yitu-opensource/T2T-ViT/releases/download/main/81.5_T2T_ViT_14.pth.tar), then test it by running:
+Download the [T2T-ViT-AN], then test it by running:
 
 ```
-CUDA_VISIBLE_DEVICES=0 python main.py path/to/data --model t2t_vit_14 -b 100 --eval_checkpoint path/to/checkpoint
+bash distributed_train_adjoined.sh 4 path/to/data/ --model t2t_vit_14 -b 128 --lr 1e-3 --weight-decay .05 --img-size 224 --num-classes 1000 --epochs 1 --output /output --initial-checkpoint path/to/checkpoint --eval_checkpoint --compression_factor 2 --block_depth 2
 ```
 The results look like:
 
 ```
-Test: [   0/499]  Time: 2.083 (2.083)  Loss:  0.3578 (0.3578)  Acc@1: 96.0000 (96.0000)  Acc@5: 99.0000 (99.0000)
-Test: [  50/499]  Time: 0.166 (0.202)  Loss:  0.5823 (0.6404)  Acc@1: 85.0000 (86.1569)  Acc@5: 99.0000 (97.5098)
-...
-Test: [ 499/499]  Time: 0.272 (0.172)  Loss:  1.3983 (0.8261)  Acc@1: 62.0000 (81.5000)  Acc@5: 93.0000 (95.6660)
+Test: [ 130/130]  Time: 0.074 (0.366)  Loss:  2.3297 (1.8443)  Acc@1: 56.7901 (80.9824)  Acc@5: 91.3580 (95.3181)  Acc@1 Adjoined: 53.0864 (80.3744)  Acc@5 Adjoined: 90.1235 (95.1481)
+
+Top-1 accuracy of the model is: 81.0%
+Top-1 adjoined accuracy of the model is: 80.4%
+
+```
+
+Download the [T2T-ViT-DAN], then test it by running:
+
+```
+bash distributed_train_adjoined.sh 4 path/to/data/ --model t2t_vit_14 -b 128 --lr 1e-3 --weight-decay .05 --img-size 224 --num-classes 1000 --epochs 1 --output /output --initial-checkpoint path/to/checkpoint --eval_checkpoint --compression_factor 1 1 1 1 3 2 3 1 3 1 1 1 1 1 --block_depth 4 --DAN_training
+```
+
+
+The results look like:
+
+```
+Test: [ 130/130]  Time: 0.066 (0.322)  Loss:  4.4278 (3.7195)  Acc@1: 61.7284 (81.4784)  Acc@5: 93.8272 (95.7141)  Acc@1 Adjoined: 62.9630 (81.3164)  Acc@5 Adjoined: 91.3580 (95.5301)
+
 Top-1 accuracy of the model is: 81.5%
+Top-1 adjoined accuracy of the model is: 81.3%
 
 ```
 
-Test the three lite variants: T2T-ViT-7, T2T-ViT-10, T2T-ViT-12 (take Performer in T2T module),
+## 3. Train
 
-Download the [T2T-ViT-7](https://github.com/yitu-opensource/T2T-ViT/releases/download/main/71.7_T2T_ViT_7.pth.tar), [T2T-ViT-10](https://github.com/yitu-opensource/T2T-ViT/releases/download/main/75.2_T2T_ViT_10.pth.tar) or [T2T-ViT-12](https://github.com/yitu-opensource/T2T-ViT/releases/download/main/76.5_T2T_ViT_12.pth.tar), then test it by running:
-
-```
-CUDA_VISIBLE_DEVICES=0 python main.py path/to/data --model t2t_vit_7 -b 100 --eval_checkpoint path/to/checkpoint
-```
-
-Test the model T2T-ViT-14, 384 with 83.3\% top-1 accuracy: 
-```
-CUDA_VISIBLE_DEVICES=0 python main.py path/to/data --model t2t_vit_14 --img-size 384 -b 100 --eval_checkpoint path/to/T2T-ViT-14-384 
-```
-
-
-## 4. Train
-
-Train the three lite variants: T2T-ViT-7, T2T-ViT-10 and T2T-ViT-12 (take Performer in T2T module):
-
-If only 4 GPUs are available,
+Train the T2T-ViT-14 (AN) (run on 4 GPUs) (from scratch):
 
 ```
-CUDA_VISIBLE_DEVICES=0,1,2,3 ./distributed_train.sh 4 path/to/data --model t2t_vit_7 -b 128 --lr 1e-3 --weight-decay .03 --amp --img-size 224
+bash distributed_train_adjoined.sh 4 path/to/data --model t2t_vit_14 -b 128 --lr 1e-3 --weight-decay .05 --img-size 224 --num-classes 1000 --epochs 300 --output ./output --compression_factor 2 --block_depth 2
 ```
 
-The top1-acc in 4 GPUs would be slightly lower than 8 GPUs (around 0.1%-0.3% lower).
+Train the T2T-ViT-14 (AN) (run on 4 GPUs) (from T2T-ViT-14 pretrained weights):
 
-If 8 GPUs are available: 
 ```
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 ./distributed_train.sh 8 path/to/data --model t2t_vit_7 -b 64 --lr 1e-3 --weight-decay .03 --amp --img-size 224
+bash distributed_train_adjoined.sh 3 path/to/data --model t2t_vit_14 -b 128 --lr 1e-3 --weight-decay .05 --img-size 224 --num-classes 1000 --epochs 300 --pretrained_normal path/to/checkpoint --output ./output --compression_factor 2 --block_depth 2
+```
+
+Train the T2T-ViT-14 (DAN) (run on 4 GPUs) (from scratch):
+
+```
+bash distributed_train_adjoined.sh 4 path/to/data --model t2t_vit_14 -b 128 --lr 1e-3 --weight-decay .05 --img-size 224 --num-classes 1000 --epochs 300 --output ./output --compression_factor 1 1 1 1 3 2 3 1 3 1 1 1 1 1 --block_depth 4 --DAN_training
+```
+
+Train the T2T-ViT-14 (DAN) (run on 4 GPUs) (from T2T-ViT-14 pretrained weights):
+
+```
+bash distributed_train_adjoined.sh 4 path/to/data --model t2t_vit_14 -b 128 --lr 1e-3 --weight-decay .05 --img-size 224 --num-classes 1000 --epochs 300 --pretrained_normal path/to/checkpoint --output ./output --compression_factor 1 1 1 1 3 2 3 1 3 1 1 1 1 1 --block_depth 4 --DAN_training
 ```
 
 
-Train the T2T-ViT-14 and T2T-ViT_t-14 (run on 4 or 8 GPUs):
-
-```
-CUDA_VISIBLE_DEVICES=0,1,2,3 ./distributed_train.sh 4 path/to/data --model t2t_vit_14 -b 128 --lr 1e-3 --weight-decay .05 --amp --img-size 224
-```
-
-```
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 ./distributed_train.sh 8 path/to/data --model t2t_vit_14 -b 64 --lr 5e-4 --weight-decay .05 --amp --img-size 224
-```
 If you want to train our T2T-ViT on images with 384x384 resolution, please use '--img-size 384'.
 
-
-Train the T2T-ViT-19, T2T-ViT-24 or T2T-ViT_t-19, T2T-ViT_t-24:
-
-```
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 ./distributed_train.sh 8 path/to/data --model t2t_vit_19 -b 64 --lr 5e-4 --weight-decay .065 --amp --img-size 224
-```
-
-## 5. Transfer T2T-ViT to CIFAR10/CIFAR100
-
-| Model        |  ImageNet | CIFAR10 |  CIFAR100| #params| 
-| :---         |    :---:  | :---:   |  :---:   |   :---:  | 
-| T2T-ViT-14   |   81.5    |[98.3](https://github.com/yitu-opensource/T2T-ViT/releases/download/main/cifar10_t2t-vit_14_98.3.pth)  | [88.4](https://github.com/yitu-opensource/T2T-ViT/releases/download/main/cirfar100_t2t-vit-14_88.4.pth) | 21.5M    | 
-| T2T-ViT-19   |   81.9    |[98.4](https://github.com/yitu-opensource/T2T-ViT/releases/download/main/cifar10_t2t-vit_19_98.4.pth)  | [89.0](https://github.com/yitu-opensource/T2T-ViT/releases/download/main/cifar100_t2t-vit-19_89.0.pth) |39.2M     | 
-
-We resize CIFAR10/100 to 224x224 and finetune our pretrained T2T-ViT-14/19 to CIFAR10/100 by running:
-
-```
-CUDA_VISIBLE_DEVICES=0,1 python transfer_learning.py --lr 0.05 --b 64 --num-classes 10 --img-size 224 --transfer-learning True --transfer-model /path/to/pretrained/T2T-ViT-19
-```
-
-## 6. Visualization
-
-Visualize the image features of ResNet50, you can open and run the [visualization_resnet.ipynb](https://github.com/yitu-opensource/T2T-ViT/blob/main/visualization_resnet.ipynb) file in jupyter notebook or jupyter lab; some results are given as following:
-
-<p align="center">
-<img src="https://github.com/yitu-opensource/T2T-ViT/blob/main/images/resnet_conv1.png" width="600" height="300"/>
-</p>
-
-Visualize the image features of ViT, you can open and run the [visualization_vit.ipynb](https://github.com/yitu-opensource/T2T-ViT/blob/main/visualization_vit.ipynb) file in jupyter notebook or jupyter lab; some results are given as following:
-
-<p align="center">
-<img src="https://github.com/yitu-opensource/T2T-ViT/blob/main/images/vit_block1.png" width="600" height="300"/>
-</p>
-
-Visualize attention map, you can refer to this [file](https://github.com/jeonsworld/ViT-pytorch/blob/main/visualize_attention_map.ipynb). A simple example by visualizing the attention map in attention block 4 and 5 is:
-
-
-<p align="center">
-<img src="https://github.com/yitu-opensource/T2T-ViT/blob/main/images/attention_visualization.png" width="600" height="400"/>
-</p>
 
 

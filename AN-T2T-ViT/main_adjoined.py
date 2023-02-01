@@ -236,8 +236,10 @@ parser.add_argument('--use-multi-epochs-loader', action='store_true', default=Fa
 
 # Adjoint training
 parser.add_argument('--DAN_training', action='store_true', default=False)
-parser.add_argument('--compression_factor', type=int, default=[1,1,1,1,3,2,3,1,3,1,1,1,1,1], help='')
-parser.add_argument('--block_depth', type=int, default=4, help='')
+parser.add_argument('--compression_factor', type=int, nargs="+", default=2, help='')
+parser.add_argument('--block_depth', type=int, default=2, help='')
+parser.add_argument('--pretrained_normal', type=str, default='', metavar='PATH',
+                    help='path to normal pretrained model (example: 81.5_T2T_ViT_14.pth.tar)')
 
 try:
     from apex import amp
@@ -305,7 +307,7 @@ def main():
 
     torch.manual_seed(args.seed + args.rank)
 
-    if args.resume:
+    if args.resume or args.pretrained_normal:
         initial_checkpoint = None
     else:
         initial_checkpoint = args.initial_checkpoint
@@ -324,11 +326,11 @@ def main():
         checkpoint_path=initial_checkpoint,
         bn_eps=args.bn_eps,
         img_size=args.img_size,
-        compression_factor=args.compression_factor,
+        compression_factor=args.compression_factor if args.DAN_training else args.compression_factor[0],
         block_depth=args.block_depth,
         DAN_training=args.DAN_training)
     
-    if args.resume is None and args.initial_checkpoint is not None:
+    if args.resume is None and args.pretrained_normal is not None:
         state_dict = torch.load(args.initial_checkpoint)['state_dict_ema']
         for k,v in state_dict.items():
             if k.find('block')!=-1 and k.find('norm1')!=-1:
@@ -353,7 +355,6 @@ def main():
                 model.state_dict()[new_k2].copy_(v)
             else:
                 model.state_dict()[k].copy_(v)
-    
     
     if args.local_rank == 0:
         _logger.info('Model %s created, param count: %d' %
@@ -587,8 +588,6 @@ def main():
             x = epoch/num_epochs
             train_loss_fn.alpha = min(4*(x**2), 1)
             validate_loss_fn.alpha = min(4*(x**2), 1)
-
-            eval_metrics = validate(model, loader_eval, validate_loss_fn, args, amp_autocast=amp_autocast)
 
             if args.distributed:
                 loader_train.sampler.set_epoch(epoch)
