@@ -9,7 +9,7 @@ from pytorch_image_models.models.layers import trunc_normal_
 import numpy as np
 from .token_transformer import Token_transformer
 from .token_performer import Token_performer
-from .adjoint_transformer_block import AdjointBlock, get_sinusoid_encoding, gumbel_softmax, sample_gumbel
+from .transformer_block import Block, get_sinusoid_encoding, gumbel_softmax, sample_gumbel
 
 
 def _cfg(url='', **kwargs):
@@ -39,7 +39,7 @@ default_cfgs = {
 
 
 class AdjoinedLossNAS(nn.Module):
-    def __init__(self, alpha=1, training=True, latency_coefficient):
+    def __init__(self, alpha=1, training=True, latency_coefficient=1e-12):
         super().__init__()
         self.alpha = alpha
         self.training = training
@@ -59,7 +59,6 @@ class AdjoinedLossNAS(nn.Module):
         prob2 = F.softmax(output[l//2:], dim=-1)
         kl = (prob1 * torch.log(1e-6 + prob1/(prob2+1e-6))).sum(1)
 
-        print('loss:' + str(loss) + "kl: " + str(kl.mean()) + " latency: " + str(self.gamma * latency))
         return loss + self.alpha * (10 * kl.mean() + self.gamma * latency)
 
 

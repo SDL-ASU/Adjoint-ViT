@@ -13,7 +13,7 @@ from collections import OrderedDict
 from contextlib import suppress
 from datetime import datetime
 import models_AN
-from models_AN.t2t_vit import AdjointLoss
+from models_AN.t2t_vit import AdjoinedLoss
 
 import torch
 import torch.nn as nn
@@ -53,8 +53,7 @@ parser.add_argument('--initial-checkpoint', default='', type=str, metavar='PATH'
                     help='Initialize model from this checkpoint (default: none)')
 parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='Resume full model and optimizer state from checkpoint (default: none)')
-parser.add_argument('--eval_checkpoint', default='', type=str, metavar='PATH',
-                    help='path to eval checkpoint (default: none)')
+parser.add_argument('--eval_checkpoint', default=False, action='store_true')
 parser.add_argument('--no-resume-opt', action='store_true', default=False,
                     help='prevent resume of optimizer state when resuming model')
 parser.add_argument('--num-classes', type=int, default=1000, metavar='N',
@@ -193,7 +192,7 @@ parser.add_argument('--split-bn', action='store_true',
                     help='Enable separate BN layers per augmentation split.')
 
 # Model Exponential Moving Average
-parser.add_argument('--model-ema', action='store_true', default=True,
+parser.add_argument('--model-ema', action='store_true', default=False,
                     help='Enable tracking moving average of model weights')
 parser.add_argument('--model-ema-force-cpu', action='store_true', default=False,
                     help='Force ema to be tracked on CPU, rank=0 node only. Disables EMA validation.')
@@ -237,8 +236,8 @@ parser.add_argument('--use-multi-epochs-loader', action='store_true', default=Fa
 
 # Adjoint training
 parser.add_argument('--DAN_training', action='store_true', default=False)
-parser.add_argument('--compression_factor', type=int, default=2, help='')
-parser.add_argument('--block_depth', type=int, default=2, help='')
+parser.add_argument('--compression_factor', type=int, default=[1,1,1,1,3,2,3,1,3,1,1,1,1,1], help='')
+parser.add_argument('--block_depth', type=int, default=4, help='')
 
 try:
     from apex import amp
@@ -329,7 +328,7 @@ def main():
         block_depth=args.block_depth,
         DAN_training=args.DAN_training)
     
-    if args.resume is None:
+    if args.resume is None and args.initial_checkpoint is not None:
         state_dict = torch.load(args.initial_checkpoint)['state_dict_ema']
         for k,v in state_dict.items():
             if k.find('block')!=-1 and k.find('norm1')!=-1:
@@ -551,8 +550,8 @@ def main():
         pin_memory=args.pin_mem,
     )
 
-    train_loss_fn = AdjointLoss(alpha=1, training=True).cuda()
-    validate_loss_fn = AdjointLoss(alpha=1, training=False).cuda()
+    train_loss_fn = AdjoinedLoss(alpha=1, training=True).cuda()
+    validate_loss_fn = AdjoinedLoss(alpha=1, training=False).cuda()
 
     eval_metric = args.eval_metric
     best_metric = None
@@ -560,9 +559,9 @@ def main():
    
 
     if args.eval_checkpoint:  # evaluate the model
-        load_checkpoint(model, args.eval_checkpoint, args.model_ema)
         val_metrics = validate(model, loader_eval, validate_loss_fn, args)
         print(f"Top-1 accuracy of the model is: {val_metrics['top1']:.1f}%")
+        print(f"Top-1 adjoined accuracy of the model is: {val_metrics['top1_adjoined']:.1f}%")
         return
 
     saver = None

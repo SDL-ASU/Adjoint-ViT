@@ -11,6 +11,7 @@ from models_NAS.t2t_vit import AdjoinedLossNAS
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision.utils
 from torch.nn.parallel import DistributedDataParallel as NativeDDP
 
@@ -46,8 +47,7 @@ parser.add_argument('--initial-checkpoint', default='', type=str, metavar='PATH'
 					help='Initialize model from this checkpoint (default: none)')
 parser.add_argument('--resume', default='', type=str, metavar='PATH',
 					help='Resume full model and optimizer state from checkpoint (default: none)')
-parser.add_argument('--eval_checkpoint', default='', type=str, metavar='PATH',
-					help='path to eval checkpoint (default: none)')
+parser.add_argument('--eval_checkpoint', action='store_true', default=False)
 parser.add_argument('--no-resume-opt', action='store_true', default=False,
 					help='prevent resume of optimizer state when resuming model')
 parser.add_argument('--num-classes', type=int, default=1000, metavar='N',
@@ -318,7 +318,7 @@ def main():
 	torch.manual_seed(args.seed + args.rank)
 
 	model = create_model(
-		model_name,
+		args.model,
 		pretrained=args.pretrained,
 		num_classes=args.num_classes,
 		drop_rate=args.drop,
@@ -355,12 +355,10 @@ def main():
 			x = torch.argmax(gumbel_softmax(v[0], v[1], 0.01, False))
 			print(k)
 			print(cf[x.item()])
-		
-		exit()
 
 	if args.local_rank == 0:
 		_logger.info('Model %s created, param count: %d' %
-					 (model_name, sum([m.numel() for m in model.parameters()])))
+					 (args.model, sum([m.numel() for m in model.parameters()])))
 
 	data_config = resolve_data_config(
 		vars(args), model=model, verbose=args.local_rank == 0)
@@ -465,10 +463,7 @@ def main():
 			if args.local_rank == 0:
 				_logger.info("Using native Torch DistributedDataParallel.")
 			# can use device str in Torch >= 1.1
-			if not is_individual_training:
-				find_unused_parameters = True
-			else:
-				find_unused_parameters = False
+			find_unused_parameters = True
 
 			model = NativeDDP(model, device_ids=[
 				args.local_rank], find_unused_parameters=find_unused_parameters)
@@ -571,32 +566,18 @@ def main():
 		pin_memory=args.pin_mem,
 	)
 
-	if not is_individual_training:
-		train_loss_fn = AdjointLoss(alpha=0, training=True, latency_coefficient=args.latency_coefficient).cuda()
-		validate_loss_fn = AdjointLoss(alpha=0, training=False, latency_coefficient=args.latency_coefficient).cuda()
-	else:
-		if args.jsd:
-			assert num_aug_splits > 1  # JSD only valid with aug splits set
-			train_loss_fn = JsdCrossEntropy(
-				num_splits=num_aug_splits, smoothing=args.smoothing).cuda()
-		elif mixup_active:
-			# smoothing is handled with mixup target transform
-			train_loss_fn = SoftTargetCrossEntropy().cuda()
-		elif args.smoothing:
-			train_loss_fn = LabelSmoothingCrossEntropy(
-				smoothing=args.smoothing).cuda()
-		else:
-			train_loss_fn = nn.CrossEntropyLoss().cuda()
-		validate_loss_fn = nn.CrossEntropyLoss().cuda()
+
+	train_loss_fn = AdjoinedLossNAS(alpha=0, training=True, latency_coefficient=args.latency_coefficient).cuda()
+	validate_loss_fn = AdjoinedLossNAS(alpha=0, training=False, latency_coefficient=args.latency_coefficient).cuda()
 
 	eval_metric = args.eval_metric
 	best_metric = None
 	best_epoch = None
 
 	if args.eval_checkpoint:  # evaluate the model
-		load_checkpoint(model, args.eval_checkpoint, args.model_ema)
-		val_metrics = validate(model, loader_eval, validate_loss_fn, args)
+		val_metrics = validate(0, model, loader_eval, validate_loss_fn, args)
 		print(f"Top-1 accuracy of the model is: {val_metrics['top1']:.1f}%")
+		print(f"Top-1 adjoined accuracy of the model is: {val_metrics['top1_NAS']:.1f}%")
 		return
 
 	saver = None
@@ -621,10 +602,9 @@ def main():
 			if args.distributed:
 				loader_train.sampler.set_epoch(epoch)
 
-			if not is_individual_training:
-				x = epoch/num_epochs
-				train_loss_fn.alpha = min(4*(x**2), 1)
-				validate_loss_fn.alpha = min(4*(x**2), 1)
+			x = epoch/num_epochs
+			train_loss_fn.alpha = min(4*(x**2), 1)
+			validate_loss_fn.alpha = min(4*(x**2), 1)
 
 			train_metrics = train_epoch(
 				epoch, model, loader_train, optimizer, gumbel_optimizer, train_loss_fn, args,
@@ -638,14 +618,14 @@ def main():
 				distribute_bn(model, args.world_size, args.dist_bn == 'reduce')
 
 			eval_metrics = validate(epoch,
-				model, loader_eval, validate_loss_fn, args, amp_autocast=amp_autocast, is_individual_training=is_individual_training)
+				model, loader_eval, validate_loss_fn, args, amp_autocast=amp_autocast)
 
 			if model_ema is not None and not args.model_ema_force_cpu:
 				if args.distributed and args.dist_bn in ('broadcast', 'reduce'):
 					distribute_bn(model_ema, args.world_size,
 								  args.dist_bn == 'reduce')
-				ema_eval_metrics = validate(
-					model_ema.ema, loader_eval, validate_loss_fn, args, amp_autocast=amp_autocast, log_suffix=' (EMA)', is_individual_training=is_individual_training)
+				ema_eval_metrics = validate(epoch,
+					model_ema.ema, loader_eval, validate_loss_fn, args, amp_autocast=amp_autocast, log_suffix=' (EMA)')
 				eval_metrics = ema_eval_metrics
 
 			if lr_scheduler is not None:
@@ -802,14 +782,13 @@ def train_epoch(
 	return OrderedDict([('loss', losses_m.avg)])
 
 
-def validate(epoch, model, loader, loss_fn, args, amp_autocast=suppress, log_suffix='', is_individual_training=False):
+def validate(epoch, model, loader, loss_fn, args, amp_autocast=suppress, log_suffix=''):
 	batch_time_m = AverageMeter()
 	losses_m = AverageMeter()
 	top1_m = AverageMeter()
 	top5_m = AverageMeter()
-	if not is_individual_training:
-		top1_NAS_m = AverageMeter()
-		top5_NAS_m = AverageMeter()
+	top1_NAS_m = AverageMeter()
+	top5_NAS_m = AverageMeter()
 
 	model.eval()
 
@@ -839,21 +818,17 @@ def validate(epoch, model, loader, loss_fn, args, amp_autocast=suppress, log_suf
 
 			loss = loss_fn(output, target)
 
-			if not is_individual_training:
-				l, _ = output.shape
-				acc1, acc5 = accuracy(output[:l//2], target, topk=(1, 5))
-				acc1_NAS, acc5_NAS = accuracy(
-					output[l//2:], target, topk=(1, 5))
-			else:
-				acc1, acc5 = accuracy(output, target, topk=(1, 5))
+			l, _ = output.shape
+			acc1, acc5 = accuracy(output[:l//2], target, topk=(1, 5))
+			acc1_NAS, acc5_NAS = accuracy(
+				output[l//2:], target, topk=(1, 5))
 
 			if args.distributed:
 				reduced_loss = reduce_tensor(loss.data, args.world_size)
 				acc1 = reduce_tensor(acc1, args.world_size)
 				acc5 = reduce_tensor(acc5, args.world_size)
-				if not is_individual_training:
-					acc1_NAS = reduce_tensor(acc1_NAS, args.world_size)
-					acc5_NAS = reduce_tensor(acc5_NAS, args.world_size)
+				acc1_NAS = reduce_tensor(acc1_NAS, args.world_size)
+				acc5_NAS = reduce_tensor(acc5_NAS, args.world_size)
 			else:
 				reduced_loss = loss.data
 
@@ -862,41 +837,26 @@ def validate(epoch, model, loader, loss_fn, args, amp_autocast=suppress, log_suf
 			losses_m.update(reduced_loss.item(), input.size(0))
 			top1_m.update(acc1.item(), output.size(0))
 			top5_m.update(acc5.item(), output.size(0))
-			if not is_individual_training:
-				top1_NAS_m.update(acc1_NAS.item(), output.size(0))
-				top5_NAS_m.update(acc5_NAS.item(), output.size(0))
+			top1_NAS_m.update(acc1_NAS.item(), output.size(0))
+			top5_NAS_m.update(acc5_NAS.item(), output.size(0))
 
 			batch_time_m.update(time.time() - end)
 			end = time.time()
 			if args.local_rank == 0 and (last_batch or batch_idx % args.log_interval == 0):
 				log_name = 'Test' + log_suffix
-				if not is_individual_training:
-					_logger.info(
-						'{0}: [{1:>4d}/{2}]  '
-						'Time: {batch_time.val:.3f} ({batch_time.avg:.3f})  '
-						'Loss: {loss.val:>7.4f} ({loss.avg:>6.4f})  '
-						'Acc@1: {top1.val:>7.4f} ({top1.avg:>7.4f})  '
-						'Acc@5: {top5.val:>7.4f} ({top5.avg:>7.4f})  '
-						'Acc@1 NAS: {top1_NAS.val:>7.4f} ({top1_NAS.avg:>7.4f})  '
-						'Acc@5 NAS: {top5_NAS.val:>7.4f} ({top5_NAS.avg:>7.4f})'.format(
-							log_name, batch_idx, last_idx, batch_time=batch_time_m,
-							loss=losses_m, top1=top1_m, top5=top5_m, top1_NAS=top1_NAS_m, top5_NAS=top5_NAS_m))
-				else:
-					_logger.info(
-						'{0}: [{1:>4d}/{2}]  '
-						'Time: {batch_time.val:.3f} ({batch_time.avg:.3f})  '
-						'Loss: {loss.val:>7.4f} ({loss.avg:>6.4f})  '
-						'Acc@1: {top1.val:>7.4f} ({top1.avg:>7.4f})  '
-						'Acc@5: {top5.val:>7.4f} ({top5.avg:>7.4f})'.format(
-							log_name, batch_idx, last_idx, batch_time=batch_time_m,
-							loss=losses_m, top1=top1_m, top5=top5_m))
+				_logger.info(
+					'{0}: [{1:>4d}/{2}]  '
+					'Time: {batch_time.val:.3f} ({batch_time.avg:.3f})  '
+					'Loss: {loss.val:>7.4f} ({loss.avg:>6.4f})  '
+					'Acc@1: {top1.val:>7.4f} ({top1.avg:>7.4f})  '
+					'Acc@5: {top5.val:>7.4f} ({top5.avg:>7.4f})  '
+					'Acc@1 NAS: {top1_NAS.val:>7.4f} ({top1_NAS.avg:>7.4f})  '
+					'Acc@5 NAS: {top5_NAS.val:>7.4f} ({top5_NAS.avg:>7.4f})'.format(
+						log_name, batch_idx, last_idx, batch_time=batch_time_m,
+						loss=losses_m, top1=top1_m, top5=top5_m, top1_NAS=top1_NAS_m, top5_NAS=top5_NAS_m))
 
-	if not is_individual_training:
-		metrics = OrderedDict(
-			[('loss', losses_m.avg), ('top1', top1_m.avg), ('top5', top5_m.avg), ('top1_NAS', top1_NAS_m.avg), ('top5_NAS', top5_NAS_m.avg)])
-	else:
-		metrics = OrderedDict(
-			[('loss', losses_m.avg), ('top1', top1_m.avg), ('top5', top5_m.avg)])
+	metrics = OrderedDict(
+		[('loss', losses_m.avg), ('top1', top1_m.avg), ('top5', top5_m.avg), ('top1_NAS', top1_NAS_m.avg), ('top5_NAS', top5_NAS_m.avg)])
 
 	return metrics
 

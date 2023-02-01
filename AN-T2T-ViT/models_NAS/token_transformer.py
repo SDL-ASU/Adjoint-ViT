@@ -1,14 +1,9 @@
-# Copyright (c) [2012]-[2021] Shanghai Yitu Technology Co., Ltd.
-#
-# This source code is licensed under the Clear BSD License
-# LICENSE file in the root directory of this file
-# All rights reserved.
 """
 Take the standard Transformer as T2T Transformer
 """
 import torch.nn as nn
 from timm.models.layers import DropPath
-from .adjoint_transformer_block import AdjointMlp
+from .transformer_block import Mlp
 
 
 class Attention(nn.Module):
@@ -57,7 +52,7 @@ class Token_transformer(nn.Module):
         self.drop_path = DropPath(
             drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(in_dim)
-        self.mlp = AdjointMlp(in_features=in_dim, hidden_features=int(
+        self.mlp = Mlp(in_features=in_dim, hidden_features=int(
             in_dim*mlp_ratio), out_features=in_dim, act_layer=act_layer, drop=drop)
 
     def forward(self, x):
