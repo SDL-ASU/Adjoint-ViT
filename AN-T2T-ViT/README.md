@@ -44,10 +44,8 @@ bash distributed_train_adjoined.sh 4 path/to/data/ --model t2t_vit_14 -b 128 --l
 The results look like:
 
 ```
-Test: [ 130/130]  Time: 0.074 (0.366)  Loss:  2.3297 (1.8443)  Acc@1: 56.7901 (80.9824)  Acc@5: 91.3580 (95.3181)  Acc@1 Adjoined: 53.0864 (80.3744)  Acc@5 Adjoined: 90.1235 (95.1481)
-
-Top-1 accuracy of the model is: 81.0%
-Top-1 adjoined accuracy of the model is: 80.4%
+Top-1 accuracy of the large model is: 81.0%
+Top-1 accuracy of the small/compressed model is: 80.4%
 
 ```
 
@@ -61,10 +59,8 @@ bash distributed_train_adjoined.sh 4 path/to/data/ --model t2t_vit_14 -b 128 --l
 The results look like:
 
 ```
-Test: [ 130/130]  Time: 0.066 (0.322)  Loss:  4.4278 (3.7195)  Acc@1: 61.7284 (81.4784)  Acc@5: 93.8272 (95.7141)  Acc@1 Adjoined: 62.9630 (81.3164)  Acc@5 Adjoined: 91.3580 (95.5301)
-
-Top-1 accuracy of the model is: 81.5%
-Top-1 adjoined accuracy of the model is: 81.3%
+Top-1 accuracy of the large model is: 81.5%
+Top-1 adjoined accuracy of the small model is: 81.3%
 
 ```
 
