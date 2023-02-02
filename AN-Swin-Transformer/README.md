@@ -6,13 +6,6 @@ This folder contains the implementation of the AN-Swin-Transformer for image cla
 
 ### Install
 
-- Clone this repo: [TODO]
-
-```bash
-git clone https://github.com/microsoft/Swin-Transformer.git
-cd Swin-Transformer
-```
-
 - Create a conda virtual environment and activate it:
 
 ```bash
@@ -147,15 +140,22 @@ python -m torch.distributed.launch --nproc_per_node 1 --master_port 12345  main_
 --cfg configs/swin/swin_base_patch4_window7_224_22kto1k_finetune.yaml --pretrained swin_base_patch4_window7_224_22k.pth \
 --resume Swin-B-AN.pth --data-path path/to/data --disable_amp
 ```
-
+The results look like this:
+```
+INFO Accuracy of the network on the 50000 test images: 85.23%
+INFO Adjoined Accuracy of the network on the 50000 test images: 85.05%
+```
 For example, to evaluate the `Swin-B-DAN` with a single GPU:
-
 ```bash
 python -m torch.distributed.launch --nproc_per_node 1 --master_port 12345  main_adjoined.py --eval \
 --cfg configs/swin/swin_base_patch4_window7_224_22kto1k_finetune.yaml --pretrained swin_base_patch4_window7_224_22k.pth \
 --resume Swin-B-DAN.pth --data-path path/to/data --disable_amp opts DAN_TRAINING True
 ```
-
+The results look like this:
+```
+INFO Accuracy of the network on the 50000 test images: 85.3%
+INFO Adjoined Accuracy of the network on the 50000 test images: 85.27%
+```
 ### Training on ImageNet-1K pretrained Swin-B
 
 To train a `AN-Swin-Transformer` on ImageNet, run:
