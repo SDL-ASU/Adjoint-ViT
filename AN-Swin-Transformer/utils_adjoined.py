@@ -115,7 +115,7 @@ def load_pretrained(config, model, logger):
 			del state_dict['head.bias']
 			logger.warning(f"Error in loading classifier head, re-init classifier head to 0")
 
-    state_dict_temp = state_dict.copy()
+	state_dict_temp = state_dict.copy()
 	for k,v in state_dict_temp.items():
 		if k.find('blocks')!=-1 and k.find('norm1')!=-1:
 			new_k1 = k.replace('norm1', "norm1_large")

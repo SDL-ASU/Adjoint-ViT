@@ -1,2 +1,2 @@
 from .build import build_model
-from .adjointLoss import AdjointLoss
+from .adjoinedLoss import AdjoinedLoss
