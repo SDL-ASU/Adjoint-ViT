@@ -444,18 +444,6 @@ class BasicLayer(nn.Module):
                 x = blk(x)
     
         if self.downsample is not None:
-            # if self.alpha <= self.alpha_downsample:
-            #     l = x.shape[2]
-            #     l *= self.alpha
-            #     l //= self.alpha_downsample
-            #     x = x[:, :, :l]
-            # else:
-            #     b, l, c = x.shape
-            #     alpha = self.alpha // self.alpha_downsample
-            #     target = torch.zeros(b, l, c * alpha, device=torch.device('cuda'))
-            #     target[:, :, :c] = x
-            #     x = target
-
             x = self.downsample(x)
         
         if self.alpha_downsample > self.alpha_next:

@@ -14,13 +14,13 @@ from thop import profile
 from timm.loss import LabelSmoothingCrossEntropy, SoftTargetCrossEntropy
 from timm.utils import accuracy, AverageMeter
 
-from config import get_config
+from config_small import get_config
 from smallModel import build_model
 from data import build_loader
 from lr_scheduler import build_scheduler
 from optimizer import build_optimizer
 from logger import create_logger
-from utils import load_checkpoint, load_pretrained, save_checkpoint, NativeScalerWithGradNormCount, auto_resume_helper, reduce_tensor
+from utils_small import load_checkpoint, load_pretrained, save_checkpoint, NativeScalerWithGradNormCount, auto_resume_helper, reduce_tensor
 
 torch.autograd.set_detect_anomaly(True)
 
@@ -87,11 +87,9 @@ def main(config):
     if hasattr(model, 'flops'):
         flops = model.flops()
         logger.info(f"number of GFLOPs: {flops / 1e9}")
-
-    model.cuda()
-    model_without_ddp = model
-
     
+    model.cuda()
+    model_without_ddp = model    
 
     optimizer = build_optimizer(config, model)
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.LOCAL_RANK], broadcast_buffers=False)
@@ -133,8 +131,8 @@ def main(config):
 
     if config.MODEL.PRETRAINED and (not config.MODEL.RESUME):
         load_pretrained(config, model_without_ddp, logger)
-        acc1, acc5, loss = validate(config, data_loader_val, model)
-        logger.info(f"Accuracy of the network on the {len(dataset_val)} test images: {acc1:.1f}%")
+        # acc1, acc5, loss = validate(config, data_loader_val, model)
+        # logger.info(f"Accuracy of the network on the {len(dataset_val)} test images: {acc1:.1f}%")
 
     if config.THROUGHPUT_MODE:
         throughput(data_loader_val, model, logger)
