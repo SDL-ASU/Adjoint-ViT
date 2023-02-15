@@ -196,6 +196,9 @@ _C.COMPRESSION_FACTORS = [1, 2, 4, 8]
 
 # Latency coefficient
 _C.LATENCY_COEFFICIENT = 1e-11
+
+#Get Architecture
+_C.GET_ARCHITECTURE = False
 # -----------------------------------------------------------------------------
 # Augmentation settings
 # -----------------------------------------------------------------------------
